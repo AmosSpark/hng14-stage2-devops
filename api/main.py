@@ -11,6 +11,14 @@ r = redis.Redis(
     password=os.environ["REDIS_PASSWORD"]
 )
 
+@app.get("/health")
+def health():
+    try:
+        r.ping()
+    except Exception:
+        raise HTTPException(status_code=503, detail="Redis unavailable")
+    return {"status": "healthy"}
+
 @app.post("/jobs")
 def create_job():
     job_id = str(uuid.uuid4())

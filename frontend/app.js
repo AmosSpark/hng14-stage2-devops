@@ -13,6 +13,10 @@ if (!API_URL) {
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "views")));
 
+app.get("/health", (req, res) => {
+  res.status(200).json({ status: "healthy" });
+});
+
 app.post("/submit", async (req, res) => {
   try {
     const response = await axios.post(`${API_URL}/jobs`);
