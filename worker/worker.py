@@ -3,16 +3,24 @@ import time
 import os
 import signal
 
-r = redis.Redis(host=os.environ["REDIS_HOST"], port=int(os.environ["REDIS_PORT"]), password=os.environ["REDIS_PASSWORD"])
+r = redis.Redis(
+                  host=os.environ["REDIS_HOST"], 
+                  port=int(os.environ["REDIS_PORT"]), 
+                  password=os.environ["REDIS_PASSWORD"]
+                )
+
 
 running = True
+
 
 def shutdown(signum, frame):
     global running
     running = False
+    
 
 signal.signal(signal.SIGTERM, shutdown)
 signal.signal(signal.SIGINT, shutdown)
+
 
 def process_job(job_id):
     print(f"Processing job {job_id}")
