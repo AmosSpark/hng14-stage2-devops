@@ -1,27 +1,23 @@
-import { defineConfig } from "eslint/config";
-import globals from "globals";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import js from "@eslint/js";
-import { FlatCompat } from "@eslint/eslintrc";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const compat = new FlatCompat({
-    baseDirectory: __dirname,
-    recommendedConfig: js.configs.recommended,
-    allConfig: js.configs.all
-});
-
-export default defineConfig([{
-    extends: compat.extends("eslint:recommended"),
-
+export default [
+  {
+    files: ["**/*.js"],
     languageOptions: {
-        globals: {
-            ...globals.node,
-        },
-
-        ecmaVersion: "latest",
-        sourceType: "commonjs",
+      ecmaVersion: 2021,
+      globals: {
+        require: "readonly",
+        module: "readonly",
+        exports: "readonly",
+        __dirname: "readonly",
+        __filename: "readonly",
+        process: "readonly",
+        console: "readonly",
+        setTimeout: "readonly",
+        fetch: "readonly",
+      },
     },
-}]);
+    rules: {
+      "no-unused-vars": "warn",
+      "no-undef": "error",
+    },
+  },
+];
