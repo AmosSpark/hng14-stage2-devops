@@ -1,5 +1,6 @@
 services:
   redis:
+    restart: unless-stopped
     image: redis:7-alpine
     command: redis-server --requirepass ${REDIS_PASSWORD}
     networks:
@@ -16,6 +17,7 @@ services:
           memory: 128M
 
   api:
+    restart: unless-stopped
     build: ./api
     networks:
       - internal
@@ -46,6 +48,7 @@ services:
           memory: 256M
 
   worker:
+    restart: unless-stopped
     build: ./worker
     networks:
       - internal
@@ -64,6 +67,7 @@ services:
           memory: 256M
 
   frontend:
+    restart: unless-stopped
     build: ./frontend
     ports:
       - "${FRONTEND_PORT}:3000"
