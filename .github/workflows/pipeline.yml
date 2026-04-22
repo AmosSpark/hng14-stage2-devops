@@ -151,8 +151,7 @@ jobs:
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: ${{ env.REGISTRY }}/api:${{ github.sha }}
-          format: sarif
-          output: trivy-api.sarif
+          format: table
           severity: CRITICAL
           exit-code: "1"
 
@@ -160,8 +159,7 @@ jobs:
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: ${{ env.REGISTRY }}/worker:${{ github.sha }}
-          format: sarif
-          output: trivy-worker.sarif
+          format: table
           severity: CRITICAL
           exit-code: "1"
 
@@ -169,8 +167,7 @@ jobs:
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: ${{ env.REGISTRY }}/frontend:${{ github.sha }}
-          format: sarif
-          output: trivy-frontend.sarif
+          format: table
           severity: CRITICAL
           exit-code: "1"
 
@@ -180,6 +177,7 @@ jobs:
         with:
           name: trivy-results
           path: "*.sarif"
+          if-no-files-found: ignore
 
   # ─────────────────────────────────────────
   # STAGE 5: INTEGRATION TEST
