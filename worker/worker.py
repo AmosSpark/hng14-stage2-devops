@@ -4,9 +4,9 @@ import os
 import signal
 
 r = redis.Redis(
-host=os.environ["REDIS_HOST"], 
-port=int(os.environ["REDIS_PORT"]), 
-password=os.environ["REDIS_PASSWORD"]
+    host=os.environ["REDIS_HOST"],
+    port=int(os.environ["REDIS_PORT"]),
+    password=os.environ["REDIS_PASSWORD"]
 )
 
 
