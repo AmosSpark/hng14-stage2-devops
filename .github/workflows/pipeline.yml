@@ -258,3 +258,72 @@ jobs:
       - name: Tear down stack
         if: always()
         run: docker compose down -v
+
+  # ─────────────────────────────────────────
+  # STAGE 6: DEPLOY (main branch only)
+  # ─────────────────────────────────────────
+  deploy:
+    needs: integration-test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download images
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-images
+          path: /tmp/images/
+
+      - name: Load images into Docker
+        run: |
+          for f in /tmp/images/*.tar.gz; do
+            docker load < $f
+          done
+
+      - name: Create .env file
+        run: |
+          cat > .env << EOF
+          REDIS_HOST=${{ env.REDIS_HOST }}
+          REDIS_PORT=${{ env.REDIS_PORT }}
+          REDIS_PASSWORD=${{ env.REDIS_PASSWORD }}
+          APP_ENV=production
+          API_URL=http://api:8000
+          FRONTEND_PORT=${{ env.FRONTEND_PORT }}
+          EOF
+      - name: Rolling update
+        run: |
+          docker compose up -d redis
+
+          for service in api worker frontend; do
+            echo "──── Rolling update: $service ────"
+
+            docker compose up -d --no-deps $service
+
+            HEALTHY=false
+            for i in $(seq 1 12); do
+              CONTAINER=$(docker compose ps -q $service)
+              STATUS=$(docker inspect --format='{{.State.Health.Status}}' $CONTAINER 2>/dev/null || echo "none")
+              echo "[$service] Health: $STATUS (attempt $i/12)"
+              if [ "$STATUS" = "healthy" ]; then
+                HEALTHY=true
+                break
+              fi
+              sleep 5
+            done
+
+            if [ "$HEALTHY" = "false" ]; then
+              echo "[$service] Health check failed after 60s — aborting"
+              docker compose stop $service
+              exit 1
+            fi
+
+            echo "[$service] Deployed successfully"
+          done
+
+          echo "All services deployed successfully"
+
+      - name: Tear down after deploy
+        if: always()
+        run: docker compose down -v
