@@ -1,0 +1,260 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+env:
+  PYTHON_VERSION: ${{ vars.PYTHON_VERSION }}
+  NODE_VERSION: ${{ vars.NODE_VERSION }}
+  REGISTRY: localhost:${{ vars.REGISTRY_PORT }}
+  REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
+  REDIS_HOST: ${{ vars.REDIS_HOST }}
+  REDIS_PORT: ${{ vars.REDIS_PORT }}
+  FRONTEND_PORT: ${{ vars.FRONTEND_PORT }}
+
+jobs:
+  # ─────────────────────────────────────────
+  # STAGE 1: LINT
+  # ─────────────────────────────────────────
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install flake8
+        run: pip install flake8
+
+      - name: Lint Python - API
+        run: flake8 api/ --max-line-length=120 --exclude=api/tests
+
+      - name: Lint Python - Worker
+        run: flake8 worker/ --max-line-length=120
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install frontend dependencies
+        run: cd frontend && npm ci
+
+      - name: Lint JavaScript
+        run: cd frontend && npx eslint .
+
+      - name: Lint Dockerfiles
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          recursive: true
+
+  # ─────────────────────────────────────────
+  # STAGE 2: TEST
+  # ─────────────────────────────────────────
+  test:
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          pip install pytest pytest-cov
+          pip install -r api/requirements.txt
+
+      - name: Run tests with coverage
+        run: |
+          cd api
+          pytest tests/ -v --cov=. --cov-report=xml --cov-report=term
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: api/coverage.xml
+
+  # ─────────────────────────────────────────
+  # STAGE 3: BUILD
+  # ─────────────────────────────────────────
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    services:
+      registry:
+        image: registry:2
+        ports:
+          - ${{ vars.REGISTRY_PORT }}:5000
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: network=host
+
+      - name: Build and push all images to local registry
+        run: |
+          SHA=${{ github.sha }}
+          for service in api worker frontend; do
+            docker build \
+              -t ${{ env.REGISTRY }}/$service:$SHA \
+              -t ${{ env.REGISTRY }}/$service:latest \
+              ./$service
+            docker push ${{ env.REGISTRY }}/$service:$SHA
+            docker push ${{ env.REGISTRY }}/$service:latest
+          done
+
+      - name: Save images as tarballs
+        run: |
+          SHA=${{ github.sha }}
+          mkdir -p /tmp/images
+          for service in api worker frontend; do
+            docker save ${{ env.REGISTRY }}/$service:$SHA | gzip > /tmp/images/$service.tar.gz
+          done
+
+      - name: Upload images as artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-images
+          path: /tmp/images/
+
+  # ─────────────────────────────────────────
+  # STAGE 4: SECURITY SCAN
+  # ─────────────────────────────────────────
+  security:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download images
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-images
+          path: /tmp/images/
+
+      - name: Load images into Docker
+        run: |
+          for f in /tmp/images/*.tar.gz; do
+            docker load < $f
+          done
+
+      - name: Scan API image
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/api:${{ github.sha }}
+          format: sarif
+          output: trivy-api.sarif
+          severity: CRITICAL
+          exit-code: "1"
+
+      - name: Scan worker image
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/worker:${{ github.sha }}
+          format: sarif
+          output: trivy-worker.sarif
+          severity: CRITICAL
+          exit-code: "1"
+
+      - name: Scan frontend image
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/frontend:${{ github.sha }}
+          format: sarif
+          output: trivy-frontend.sarif
+          severity: CRITICAL
+          exit-code: "1"
+
+      - name: Upload SARIF results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-results
+          path: "*.sarif"
+
+  # ─────────────────────────────────────────
+  # STAGE 5: INTEGRATION TEST
+  # ─────────────────────────────────────────
+  integration-test:
+    needs: security
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download images
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-images
+          path: /tmp/images/
+
+      - name: Load images into Docker
+        run: |
+          for f in /tmp/images/*.tar.gz; do
+            docker load < $f
+          done
+
+      - name: Create .env file
+        run: |
+          cat > .env << EOF
+          REDIS_HOST=${{ env.REDIS_HOST }}
+          REDIS_PORT=${{ env.REDIS_PORT }}
+          REDIS_PASSWORD=${{ env.REDIS_PASSWORD }}
+          APP_ENV=production
+          API_URL=http://api:8000
+          FRONTEND_PORT=${{ env.FRONTEND_PORT }}
+          EOF
+
+      - name: Start full stack
+        run: docker compose up -d
+
+      - name: Wait for frontend to be ready
+        run: |
+          echo "Waiting for stack to be ready..."
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:${{ env.FRONTEND_PORT }}/health > /dev/null 2>&1; then
+              echo "Stack is ready after ${i} attempts"
+              break
+            fi
+            echo "Attempt $i/30 — not ready yet"
+            sleep 3
+          done
+
+      - name: Submit job and poll until completed
+        run: |
+          RESPONSE=$(curl -sf -X POST http://localhost:${{ env.FRONTEND_PORT }}/submit)
+          echo "Submit response: $RESPONSE"
+
+          JOB_ID=$(echo $RESPONSE | python3 -c "import sys,json; print(json.load(sys.stdin)['job_id'])")
+          echo "Job ID: $JOB_ID"
+
+          if [ -z "$JOB_ID" ] || [ "$JOB_ID" = "None" ]; then
+            echo "Failed to get a valid job ID"
+            exit 1
+          fi
+
+          for i in $(seq 1 30); do
+            STATUS_RESPONSE=$(curl -sf http://localhost:${{ env.FRONTEND_PORT }}/status/$JOB_ID)
+            STATUS=$(echo $STATUS_RESPONSE | python3 -c "import sys,json; print(json.load(sys.stdin).get('status', 'unknown'))")
+            echo "Attempt $i/30 — status: $STATUS"
+            if [ "$STATUS" = "completed" ]; then
+              echo "Job completed successfully"
+              exit 0
+            fi
+            sleep 2
+          done
+
+          echo "Job did not complete within timeout"
+          exit 1
+
+      - name: Tear down stack
+        if: always()
+        run: docker compose down -v
